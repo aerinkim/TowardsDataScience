@@ -76,27 +76,37 @@ def slow(data, weight):
     return output
 
 def conv2d_nhwc():
-    input_placeholder = tvm.placeholder(input_shape, name='data')
-    weight_placeholder = tvm.placeholder(weight_shape, name='weight')
-    rc = tvm.reduce_axis((0, input_channels), name='rc')
-    ry = tvm.reduce_axis((0, kernel_size), name='ry')
-    rx = tvm.reduce_axis((0, kernel_size), name='rx')
-    comp = tvm.compute((output_height, output_width, output_channels),
-        lambda output_y, output_x, output_channel: 
-        #TODO #1: fill in lambda function to define the compute declaration
-        )
-    s = tvm.create_schedule(comp.op)
+    input_placeholder = tvm.te.placeholder(input_shape, name='data')
+    weight_placeholder = tvm.te.placeholder(weight_shape, name='weight')
+    rc = tvm.te.reduce_axis((0, input_channels), name='rc')
+    ry = tvm.te.reduce_axis((0, kernel_size), name='ry')
+    rx = tvm.te.reduce_axis((0, kernel_size), name='rx')
+    #TODO #1: fill in lambda function to define the compute declaration
+    comp = tvm.te.compute((output_height, output_width, output_channels),
+        lambda output_y, output_x, output_channel: tvm.te.sum(input_placeholder[output_y + ry][output_x + rx][rc] * weight_placeholder[ry][rx][rc][output_channel], axis = [ry, rx, rc]))#[rc,ry,rx]))
+    s = tvm.te.create_schedule(comp.op)
     schedule(s, comp)
     print(tvm.lower(s, [input_placeholder, weight_placeholder, comp], simple_mode=True))
     func = tvm.build(s, [input_placeholder, weight_placeholder, comp], target='llvm -mcpu=core-avx2', name='conv') 
     return func 
 
+
 def schedule(s, comp):
     yo, xo, co = comp.op.axis
     ry, rx, rc = s[comp].op.reduce_axis
+    
     #TODO #2: write the rest of the schedule function
-    # The goal is to achieve 2x the performance of the default schedule on your
-    # machine
+    # The goal is to achieve 2x the performance of the default schedule on your machine.
+    bn = 32    
+    xo, yo, xi, yi = s[comp].tile(comp.op.axis[0], comp.op.axis[1], bn, bn)
+    ko, ki = s[comp].split(xo, factor=4)
+
+    #s[comp].reorder(xo, yo, ko, ki, xi, yi)
+
+    # Vectorization
+    s[comp].vectorize(yi)
+
+
 
 def main():
     func = conv2d_nhwc()
@@ -109,10 +119,15 @@ def main():
     res = timer(data_tvm, weight_tvm, output_tvm)
     # Print statement showing timing information
     
-    #TODO #3: report the relative speedup and run time numbers of the schedule
-    #kernel and the default schedule kernel
-    #explain each of the schedule transformations you used, and how
-    #they impacted the performance of the kernel
+    #TODO #3: report the relative speedup and run time numbers of the schedule kernel and the default schedule kernel
+    #explain each of the schedule transformations you used, and how they impacted the performance of the kernel
+
+    # original result : ProfileResult(mean=0.1915324284, results=(0.1915324284,))
+
+    # improved result : ProfileResult(mean=0.09961044999999999, results=(0.09961044999999999,))
+
+    # Vectorization. When the memory access pattern is uniform, the compiler can detect this pattern and pass the continuous memory to vector processor. Using vectorization hint the compiler this pattern, so that we can accelerate it.
+
     print(res)
     output_tvm_numpy = output_tvm.asnumpy() 
     output = slow(data, weight)
@@ -122,7 +137,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
 
